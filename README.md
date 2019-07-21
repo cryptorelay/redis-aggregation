@@ -33,7 +33,7 @@ What the above example does is basically ``select time_bucket('1 minute', time),
 ### Notice
 
 * The aggregation key only stores partial aggregation state for current time bucket. When save happens, the aggretation results are written into standalone keys.
-* The aggregation view with ``interval n`` option is like group by in sql, their results are written into hash value, whose key is timestamp for the time bucket. The aggregation view without ``interval`` option, there results are written into simple string values. 
+* The aggregation view with ``interval n`` option is like group by in sql, their results are written into hash value, whose key is timestamp for the time bucket. The aggregation view without ``interval`` option, their results are written into simple string values. 
 * Save happens when input time cross time bucket, or command `agg.save` get called.
 * The input timestamp need to increase, the inputs with smaller timestamp are ignored.
 * Currently Only supports these aggregation operations:  ``min``, ``max``, ``first``, ``last``, ``sum``, ``avg``  .
