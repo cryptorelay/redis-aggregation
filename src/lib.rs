@@ -164,6 +164,25 @@ impl AggOp for AggAvg {
     }
 }
 
+struct AggSum(Value);
+impl AggOp for AggSum {
+    fn save(&self) -> (&str, String) {
+        ("sum", serde_json::to_string(&self.0).unwrap())
+    }
+    fn load(&mut self, buf: &str) {
+        self.0 = serde_json::from_str(buf).unwrap();
+    }
+    fn update(&mut self, value: Value) {
+        self.0 += value;
+    }
+    fn reset(&mut self) {
+        self.0 = 0.;
+    }
+    fn current(&self) -> Option<Value> {
+        return Some(self.0)
+    }
+}
+
 fn parse_agg_type(name: &String) -> Option<Box<AggOp>>
 {
     if name == "first" {
@@ -176,6 +195,8 @@ fn parse_agg_type(name: &String) -> Option<Box<AggOp>>
         return Some(Box::new(AggMax(None)));
     } else if name == "avg" {
         return Some(Box::new(AggAvg{count: 0, sum: 0.}));
+    } else if name == "sum" {
+        return Some(Box::new(AggSum(0.)));
     } else {
         return None;
     }
@@ -227,21 +248,23 @@ pub struct AggView {
 
 impl AggView {
     pub fn update(&mut self, ctx: &Context, time: Time, values: &[Value]) {
-        if self.groupby.is_some() {
-            let groupby = self.groupby.as_ref().unwrap();
-            let grouptime = groupby.func.apply(time);
-            if grouptime > groupby.current {
-                // save current and reset
-                if groupby.current > 0. {
-                    self.save(ctx).unwrap();
+        match self.groupby {
+            None => {}
+            Some(ref groupby) => {
+                let grouptime = groupby.func.apply(time);
+                if grouptime > groupby.current {
+                    // save current and reset
+                    if groupby.current > 0. {
+                        self.save(ctx).unwrap();
+                    }
+                    for agg in &mut self.fields {
+                        agg.op.reset()
+                    }
+                    self.groupby.as_mut().unwrap().current = grouptime;
+                } else if grouptime < groupby.current {
+                    // ignore the item
+                    return
                 }
-                for agg in &mut self.fields {
-                    agg.op.reset()
-                }
-                self.groupby.as_mut().unwrap().current = grouptime;
-            } else if grouptime < groupby.current {
-                // ignore the item
-                return
             }
         }
         for agg in &mut self.fields {
@@ -463,7 +486,7 @@ fn dump_table(ctx: &Context, args: Vec<String>) -> RedisResult {
             Err(RedisError::Str("key not exist"))
         }
         Some(v) => {
-            let s = serde_json::to_string(v).unwrap();
+            let s = serde_json::to_string(v).map_err(|err| { RedisError::String(err.to_string()) })?;
             Ok(RedisValue::SimpleString(s))
         }
     }
