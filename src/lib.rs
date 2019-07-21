@@ -1,8 +1,9 @@
 #[macro_use]
 extern crate redismodule;
-
 #[macro_use]
 extern crate serde_derive;
+#[macro_use]
+extern crate serde_tuple;
 
 use std::collections::HashMap;
 use std::vec::Vec;
@@ -211,7 +212,7 @@ struct GroupState {
     func: TimeFunc
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize_tuple, Deserialize_tuple)]
 pub struct AggField {
     index: usize,
     op: Box<AggOp>
@@ -231,7 +232,9 @@ impl AggView {
             let grouptime = groupby.func.apply(time);
             if grouptime > groupby.current {
                 // save current and reset
-                self.save(ctx).unwrap();
+                if groupby.current > 0. {
+                    self.save(ctx).unwrap();
+                }
                 for agg in &mut self.fields {
                     agg.op.reset()
                 }
@@ -450,7 +453,7 @@ fn insert_data(ctx: &Context, args: Vec<String>) -> RedisResult {
 }
 
 fn dump_table(ctx: &Context, args: Vec<String>) -> RedisResult {
-    if args.len() <= 2 {
+    if args.len() <= 1 {
         return Err(RedisError::WrongArity);
     }
     ctx.auto_memory();
@@ -466,6 +469,26 @@ fn dump_table(ctx: &Context, args: Vec<String>) -> RedisResult {
     }
 }
 
+fn save_table(ctx: &Context, args: Vec<String>) -> RedisResult {
+    if args.len() <= 1 {
+        return Err(RedisError::WrongArity);
+    }
+    ctx.auto_memory();
+
+    let key = ctx.open_key(&args[1]);
+    match key.get_value::<AggTable>(&agg::REDIS_TYPE)? {
+        None => {
+            Err(RedisError::Str("key not exist"))
+        }
+        Some(v) => {
+            for view in &v.views {
+                view.save(ctx)?;
+            }
+            REDIS_OK
+        }
+    }
+}
+
 redis_module! {
     name: "aggregate",
     version: 1,
@@ -477,5 +500,6 @@ redis_module! {
         ["agg.view", add_view, "write"],
         ["agg.insert", insert_data, "write"],
         ["agg.dump", dump_table, ""],
+        ["agg.save", save_table, "write"],
     ],
 }
