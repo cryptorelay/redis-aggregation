@@ -35,6 +35,7 @@ $ redis-cli hgetall kline_1m
 * Save happens when input time cross time bucket, or command `agg.save` get called.
 * The input timestamp need to increase, the inputs with smaller timestamp are ignored.
 * Currently Only supports these aggregation operations:  ``min``, ``max``, ``first``, ``last``, ``sum``, ``avg``  .
+* Only support ``aof-use-rdb-preamble yes``, or just disable appendonly. It saves me some time to implement aof rewrite operation, i think this option will be the default in the future anyway.
 
 ### TODO
 
