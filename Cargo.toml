@@ -1,0 +1,12 @@
+[package]
+name = "redis-aggregation"
+version = "0.1.0"
+authors = ["yihuang <yi.codeplayer@gmail.com>"]
+edition = "2018"
+
+[lib]
+name = "aggregate"
+crate-type = ["cdylib"]
+
+[dependencies]
+redismodule = {path = './redismodule-rs'}
