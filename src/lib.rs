@@ -1,11 +1,17 @@
 #[macro_use]
 extern crate redismodule;
 
+#[macro_use]
+extern crate serde_derive;
+
 use std::collections::HashMap;
 use std::vec::Vec;
 use std::convert::TryInto;
 use std::num::TryFromIntError;
 use serde_json;
+use serde::{Serialize, Serializer, Deserialize, Deserializer};
+use serde::ser::SerializeSeq;
+use serde::de::Error;
 
 use redismodule::{
     Context, RedisResult, RedisError, REDIS_OK,
@@ -14,6 +20,7 @@ use redismodule::{
 type Time = f64;
 type Value = f64;
 
+#[derive(Serialize, Deserialize)]
 enum TimeFunc {
     Interval(u32)
 }
@@ -26,6 +33,8 @@ impl TimeFunc {
 }
 
 trait AggOp {
+    fn save(&self) -> (&str, String);
+    fn load(&mut self, buf: &str);
     fn update(&mut self, value: Value);
     fn reset(&mut self);
     fn current(&self) -> Option<Value>;
@@ -33,6 +42,12 @@ trait AggOp {
 
 struct AggFirst(Option<Value>);
 impl AggOp for AggFirst {
+    fn save(&self) -> (&str, String) {
+        ("first", serde_json::to_string(&self.0).unwrap())
+    }
+    fn load(&mut self, buf: &str) {
+        self.0 = serde_json::from_str::<Option<Value>>(buf).unwrap();
+    }
     fn update(&mut self, value: Value) {
         if let None = self.0 {
             self.0 = Some(value)
@@ -48,6 +63,12 @@ impl AggOp for AggFirst {
 
 struct AggLast(Option<Value>);
 impl AggOp for AggLast {
+    fn save(&self) -> (&str, String) {
+        ("last", serde_json::to_string(&self.0).unwrap())
+    }
+    fn load(&mut self, buf: &str) {
+        self.0 = serde_json::from_str::<Option<Value>>(buf).unwrap();
+    }
     fn update(&mut self, value: Value) {
         self.0 = Some(value)
     }
@@ -61,6 +82,12 @@ impl AggOp for AggLast {
 
 struct AggMin(Option<Value>);
 impl AggOp for AggMin {
+    fn save(&self) -> (&str, String) {
+        ("min", serde_json::to_string(&self.0).unwrap())
+    }
+    fn load(&mut self, buf: &str) {
+        self.0 = serde_json::from_str::<Option<Value>>(buf).unwrap();
+    }
     fn update(&mut self, value: Value) {
         match self.0 {
             None => {
@@ -82,6 +109,12 @@ impl AggOp for AggMin {
 
 struct AggMax(Option<Value>);
 impl AggOp for AggMax {
+    fn save(&self) -> (&str, String) {
+        ("max", serde_json::to_string(&self.0).unwrap())
+    }
+    fn load(&mut self, buf: &str) {
+        self.0 = serde_json::from_str::<Option<Value>>(buf).unwrap();
+    }
     fn update(&mut self, value: Value) {
         match self.0 {
             None => {
@@ -106,6 +139,14 @@ struct AggAvg {
     sum: Value
 }
 impl AggOp for AggAvg {
+    fn save(&self) -> (&str, String) {
+        ("avg", serde_json::to_string(&(self.count, self.sum)).unwrap())
+    }
+    fn load(&mut self, buf: &str) {
+        let t = serde_json::from_str::<(usize, Value)>(buf).unwrap();
+        self.count = t.0;
+        self.sum =t.1;
+    }
     fn update(&mut self, value: Value) {
         self.sum += value
     }
@@ -120,11 +161,6 @@ impl AggOp for AggAvg {
             return Some(self.sum / self.count as f64)
         }
     }
-}
-
-struct GroupState {
-    current: Time,
-    func: TimeFunc
 }
 
 fn parse_agg_type(name: &String) -> Option<Box<AggOp>>
@@ -144,21 +180,48 @@ fn parse_agg_type(name: &String) -> Option<Box<AggOp>>
     }
 }
 
+impl Serialize for Box<AggOp> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let (name, value) = self.save();
+        let mut seq = serializer.serialize_seq(Some(2))?;
+        seq.serialize_element(name)?;
+        seq.serialize_element(&value)?;
+        seq.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Box<AggOp> {
+    fn deserialize<D>(deserializer: D) -> Result<Box<AggOp>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (name, value) = Deserialize::deserialize(deserializer)?;
+        let mut agg = parse_agg_type(&name).ok_or(Error::custom("invalid agg type"))?;
+        agg.load(value);
+        Ok(agg)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct GroupState {
+    current: Time,
+    func: TimeFunc
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct AggField {
     index: usize,
     op: Box<AggOp>
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct AggView {
     name: String,
     fields: Vec<AggField>,
     groupby: Option<GroupState>
-}
-
-pub struct AggTable {
-    fields: Vec<String>,
-    fields_by_name: HashMap<String, usize>,
-    views: Vec<AggView>
 }
 
 impl AggView {
@@ -203,6 +266,12 @@ impl AggView {
             }
         }
     }
+}
+
+pub struct AggTable {
+    fields: Vec<String>,
+    fields_by_name: HashMap<String, usize>,
+    views: Vec<AggView>
 }
 
 impl AggTable {
@@ -283,24 +352,30 @@ mod agg {
     use redismodule::native_types::RedisType;
     use redismodule::raw;
     use std::os::raw::{c_int, c_void};
-    use std::ptr;
+    use crate::{AggTable, AggView};
 
     pub(crate) static REDIS_TYPE: RedisType = RedisType::new("aggre-hy1");
 
     #[allow(non_snake_case, unused)]
     unsafe extern "C" fn AggRdbLoad(rdb: *mut raw::RedisModuleIO, encver: c_int) -> *mut c_void {
-        //    eprintln!("MyTypeRdbLoad");
-        ptr::null_mut()
+        let fields = serde_json::from_str::<Vec<String>>(&raw::load_string(rdb)).unwrap();
+        let mut table = Box::new(AggTable::new(fields));
+        table.views = serde_json::from_str::<Vec<AggView>>(&raw::load_string(rdb)).unwrap();
+        Box::into_raw(table) as *mut c_void
     }
 
     #[allow(non_snake_case, unused)]
     #[no_mangle]
     pub unsafe extern "C" fn AggFree(value: *mut c_void) {
+        Box::from_raw(value as *mut AggTable);
     }
 
     #[allow(non_snake_case, unused)]
     #[no_mangle]
     pub unsafe extern "C" fn AggRdbSave(rdb: *mut raw::RedisModuleIO, value: *mut c_void) {
+        let table = Box::from_raw(value as *mut AggTable);
+        raw::save_string(rdb, &serde_json::to_string(&table.fields).unwrap());
+        raw::save_string(rdb, &serde_json::to_string(&table.views).unwrap());
     }
 
     pub(crate) static mut TYPE_METHODS: raw::RedisModuleTypeMethods = raw::RedisModuleTypeMethods {
@@ -372,7 +447,6 @@ fn insert_data(ctx: &Context, args: Vec<String>) -> RedisResult {
             Ok(result)
         }
     }
-
 }
 
 redis_module! {
