@@ -28,6 +28,8 @@ $ redis-cli hgetall kline_1m
 4) "[1001.11,1001.11,1000.01,1000.01,2.2,2201.12]"
 ```
 
+What the above example does is basically ``select time_bucket('1 minute', time), first(price), max(price), min(price), last(price), sum(amount), sum(value) from btc_usdt group by 1``, but runs in realtime/incremental/streaming way.
+
 ### Notice
 
 * The aggregation key only stores partial aggregation state for current time bucket. When save happens, the aggretation results are written into standalone keys.
