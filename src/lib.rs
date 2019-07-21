@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::vec::Vec;
 use std::convert::TryInto;
 use std::num::TryFromIntError;
+
 use serde_json;
 use serde::{Serialize, Serializer, Deserialize, Deserializer};
 use serde::ser::SerializeSeq;
@@ -149,7 +150,8 @@ impl AggOp for AggAvg {
         self.sum =t.1;
     }
     fn update(&mut self, value: Value) {
-        self.sum += value
+        self.sum += value;
+        self.count += 1;
     }
     fn reset(&mut self) {
         self.count = 0;
@@ -183,6 +185,169 @@ impl AggOp for AggSum {
     }
 }
 
+struct AggCount(usize);
+impl AggOp for AggCount {
+    fn save(&self) -> (&str, String) {
+        ("count", serde_json::to_string(&self.0).unwrap())
+    }
+    fn load(&mut self, buf: &str) {
+        self.0 = serde_json::from_str(buf).unwrap();
+    }
+    fn update(&mut self, _value: Value) {
+        self.0 += 1;
+    }
+    fn reset(&mut self) {
+        self.0 = 0;
+    }
+    fn current(&self) -> Option<Value> {
+        return Some(self.0 as Value)
+    }
+}
+
+struct AggStd {
+    sum: Value,
+    sum_2: Value,
+    count: usize
+}
+
+impl AggStd {
+    fn new() -> AggStd {
+        return AggStd{
+            sum: 0.,
+            sum_2: 0.,
+            count: 0
+        }
+    }
+    fn to_string(&self) -> String {
+        serde_json::to_string(&(self.sum, self.sum_2, self.count)).unwrap()
+    }
+    fn from_str(buf: &str) -> AggStd {
+        let t = serde_json::from_str::<(Value, Value, usize)>(buf).unwrap();
+        return Self {
+            sum: t.0,
+            sum_2: t.1,
+            count: t.2,
+        }
+    }
+    fn add(&mut self, value: Value) {
+        self.sum += value;
+        self.sum_2 += value * value;
+        self.count += 1;
+    }
+    fn reset(&mut self) {
+        self.sum = 0.;
+        self.sum_2 = 0.;
+        self.count = 0;
+    }
+    fn variance(&self) -> Value {
+        // ported from: https://github.com/RedisTimeSeries/RedisTimeSeries/blob/7911f43e2861472565b2aa61d8e91a9c37ec6cae/src/compaction.c
+        //  var(X) = sum((x_i - E[X])^2)
+        //  = sum(x_i^2) - 2 * sum(x_i) * E[X] + E^2[X]
+        if self.count <= 1 {
+            0.
+        } else {
+            let avg = self.sum / self.count as Value;
+            self.sum_2 - 2. * self.sum * avg + avg * avg * self.count as Value
+        }
+    }
+}
+
+struct AggVarP(AggStd);
+impl AggOp for AggVarP {
+    fn save(&self) -> (&str, String) {
+        ("varp", self.0.to_string())
+    }
+    fn load(&mut self, buf: &str) {
+        self.0 = AggStd::from_str(buf);
+    }
+    fn update(&mut self, value: Value) {
+        self.0.add(value)
+    }
+    fn reset(&mut self) {
+        self.0.reset()
+    }
+    fn current(&self) -> Option<Value> {
+        if self.0.count == 0 {
+            None
+        } else {
+            Some(self.0.variance() / self.0.count as Value)
+        }
+    }
+}
+
+struct AggVarS(AggStd);
+impl AggOp for AggVarS {
+    fn save(&self) -> (&str, String) {
+        ("vars", self.0.to_string())
+    }
+    fn load(&mut self, buf: &str) {
+        self.0 = AggStd::from_str(buf);
+    }
+    fn update(&mut self, value: Value) {
+        self.0.add(value)
+    }
+    fn reset(&mut self) {
+        self.0.reset()
+    }
+    fn current(&self) -> Option<Value> {
+        if self.0.count == 0 {
+            None
+        } else if self.0.count == 1 {
+            Some(0.)
+        } else {
+            Some(self.0.variance() / (self.0.count - 1) as Value)
+        }
+    }
+}
+
+struct AggStdP(AggStd);
+impl AggOp for AggStdP {
+    fn save(&self) -> (&str, String) {
+        ("stdp", self.0.to_string())
+    }
+    fn load(&mut self, buf: &str) {
+        self.0 = AggStd::from_str(buf);
+    }
+    fn update(&mut self, value: Value) {
+        self.0.add(value)
+    }
+    fn reset(&mut self) {
+        self.0.reset()
+    }
+    fn current(&self) -> Option<Value> {
+        if self.0.count == 0 {
+            None
+        } else {
+            Some((self.0.variance() / self.0.count as Value).sqrt())
+        }
+    }
+}
+
+struct AggStdS(AggStd);
+impl AggOp for AggStdS {
+    fn save(&self) -> (&str, String) {
+        ("stds", self.0.to_string())
+    }
+    fn load(&mut self, buf: &str) {
+        self.0 = AggStd::from_str(buf);
+    }
+    fn update(&mut self, value: Value) {
+        self.0.add(value)
+    }
+    fn reset(&mut self) {
+        self.0.reset()
+    }
+    fn current(&self) -> Option<Value> {
+        if self.0.count == 0 {
+            None
+        } else if self.0.count == 1 {
+            Some(0.)
+        } else {
+            Some((self.0.variance() / (self.0.count - 1) as Value).sqrt())
+        }
+    }
+}
+
 fn parse_agg_type(name: &String) -> Option<Box<AggOp>>
 {
     if name == "first" {
@@ -197,6 +362,16 @@ fn parse_agg_type(name: &String) -> Option<Box<AggOp>>
         return Some(Box::new(AggAvg{count: 0, sum: 0.}));
     } else if name == "sum" {
         return Some(Box::new(AggSum(0.)));
+    } else if name == "count" {
+        return Some(Box::new(AggCount(0)));
+    } else if name == "stds" {
+        return Some(Box::new(AggStdS(AggStd::new())));
+    } else if name == "stdp" {
+        return Some(Box::new(AggStdP(AggStd::new())));
+    } else if name == "vars" {
+        return Some(Box::new(AggVarS(AggStd::new())));
+    } else if name == "varp" {
+        return Some(Box::new(AggVarP(AggStd::new())));
     } else {
         return None;
     }

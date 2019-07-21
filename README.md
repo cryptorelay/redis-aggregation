@@ -36,7 +36,7 @@ What the above example does is basically ``select time_bucket('1 minute', time),
 * The aggregation view with ``interval n`` option is like group by in sql, their results are written into hash value, whose key is timestamp for the time bucket. The aggregation view without ``interval`` option, their results are written into simple string values. 
 * Save happens when input time cross time bucket, or command `agg.save` get called.
 * The input timestamp need to increase, the inputs with smaller timestamp are ignored.
-* Currently Only supports these aggregation operations:  ``min``, ``max``, ``first``, ``last``, ``sum``, ``avg``  .
+* Currently supports these aggregation operations:  ``min``, ``max``, ``first``, ``last``, ``sum``, ``avg``, ``count``, ``stds``, ``stdp``, ``vars``, ``varp``.
 * Only support ``aof-use-rdb-preamble yes``, or just disable appendonly. It saves me some time to implement aof rewrite operation, i think this option will be the default in the future anyway.
 
 ### TODO
