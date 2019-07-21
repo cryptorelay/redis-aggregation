@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::vec::Vec;
 use std::convert::TryInto;
 use std::num::TryFromIntError;
+use serde_json;
 
-use redismodule::native_types::RedisType;
 use redismodule::{
     Context, RedisResult, RedisError, REDIS_OK,
     parse_integer, parse_float};
@@ -183,9 +183,25 @@ impl AggView {
         }
     }
 
+    pub fn encode(&self) -> Result<String, RedisError> {
+        let mut values = Vec::new();
+        values.reserve_exact(self.fields.len());
+        for agg in &self.fields {
+            values.push(agg.op.current());
+        }
+        serde_json::to_string(&values).map_err(|err| RedisError::String(format!("encode failed: {}", err)))
+    }
+
     pub fn save(&self, ctx: &Context) -> RedisResult {
-        // save current values into sortedset
-        ctx.call("set", &[&self.name, "1"])
+        let encoded = self.encode()?;
+        match self.groupby {
+            None => {
+                ctx.call("set", &[&self.name, &encoded])
+            }
+            Some(ref groupby) => {
+                ctx.call("hset", &[&self.name, &groupby.current.to_string(), &encoded])
+            }
+        }
     }
 }
 
@@ -263,7 +279,43 @@ impl AggTable {
 }
 
 //////////////////////////////////////////////////////
-static AGG_REDIS_TYPE: RedisType = RedisType::new("aggre-hy1");
+mod agg {
+    use redismodule::native_types::RedisType;
+    use redismodule::raw;
+    use std::os::raw::{c_int, c_void};
+    use std::ptr;
+
+    pub(crate) static REDIS_TYPE: RedisType = RedisType::new("aggre-hy1");
+
+    #[allow(non_snake_case, unused)]
+    unsafe extern "C" fn AggRdbLoad(rdb: *mut raw::RedisModuleIO, encver: c_int) -> *mut c_void {
+        //    eprintln!("MyTypeRdbLoad");
+        ptr::null_mut()
+    }
+
+    #[allow(non_snake_case, unused)]
+    #[no_mangle]
+    pub unsafe extern "C" fn AggFree(value: *mut c_void) {
+    }
+
+    #[allow(non_snake_case, unused)]
+    #[no_mangle]
+    pub unsafe extern "C" fn AggRdbSave(rdb: *mut raw::RedisModuleIO, value: *mut c_void) {
+    }
+
+    pub(crate) static mut TYPE_METHODS: raw::RedisModuleTypeMethods = raw::RedisModuleTypeMethods {
+        version: raw::REDISMODULE_TYPE_METHOD_VERSION as u64,
+
+        rdb_load: Some(AggRdbLoad),
+        rdb_save: Some(AggRdbSave),
+        aof_rewrite: None,
+        free: Some(AggFree),
+
+        // Currently unused by Redis
+        mem_usage: None,
+        digest: None,
+    };
+}
 
 fn new_aggregates(ctx: &Context, args: Vec<String>) -> RedisResult {
     if args.len() <= 2 {
@@ -271,13 +323,13 @@ fn new_aggregates(ctx: &Context, args: Vec<String>) -> RedisResult {
     }
     ctx.auto_memory();
     let key = ctx.open_key_writable(&args[1]);
-    match key.get_value::<AggTable>(&AGG_REDIS_TYPE)? {
+    match key.get_value::<AggTable>(&agg::REDIS_TYPE)? {
         Some(_) => {
             return Err(RedisError::Str("key already exist"));
         }
         None => {
             key.set_value(
-                &AGG_REDIS_TYPE,
+                &agg::REDIS_TYPE,
                 AggTable::new(args[2..].to_vec())
             )?;
         }
@@ -292,7 +344,7 @@ fn add_view(ctx: &Context, args: Vec<String>) -> RedisResult {
     }
     ctx.auto_memory();
     let key = ctx.open_key_writable(&args[1]);
-    match key.get_value::<AggTable>(&AGG_REDIS_TYPE)? {
+    match key.get_value::<AggTable>(&agg::REDIS_TYPE)? {
         None => {
             Err(RedisError::Str("key not exist"))
         }
@@ -310,7 +362,7 @@ fn insert_data(ctx: &Context, args: Vec<String>) -> RedisResult {
     }
     ctx.auto_memory();
     let key = ctx.open_key_writable(&args[1]);
-    match key.get_value::<AggTable>(&AGG_REDIS_TYPE)? {
+    match key.get_value::<AggTable>(&agg::REDIS_TYPE)? {
         None => {
             Err(RedisError::Str("key not exist"))
         }
@@ -327,7 +379,7 @@ redis_module! {
     name: "aggregate",
     version: 1,
     data_types: [
-        AGG_REDIS_TYPE,
+        agg,
     ],
     commands: [
         ["agg.new", new_aggregates, "write"],
