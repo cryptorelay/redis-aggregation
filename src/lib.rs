@@ -14,7 +14,7 @@ use serde::ser::SerializeSeq;
 use serde::de::Error;
 
 use redismodule::{
-    Context, RedisResult, RedisError, REDIS_OK,
+    Context, RedisResult, RedisError, RedisValue, REDIS_OK,
     parse_integer, parse_float};
 
 type Time = f64;
@@ -268,8 +268,10 @@ impl AggView {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct AggTable {
     fields: Vec<String>,
+    #[serde(skip)]
     fields_by_name: HashMap<String, usize>,
     views: Vec<AggView>
 }
@@ -352,39 +354,37 @@ mod agg {
     use redismodule::native_types::RedisType;
     use redismodule::raw;
     use std::os::raw::{c_int, c_void};
-    use crate::{AggTable, AggView};
+    use crate::{AggTable};
 
     pub(crate) static REDIS_TYPE: RedisType = RedisType::new("aggre-hy1");
 
     #[allow(non_snake_case, unused)]
-    unsafe extern "C" fn AggRdbLoad(rdb: *mut raw::RedisModuleIO, encver: c_int) -> *mut c_void {
-        let fields = serde_json::from_str::<Vec<String>>(&raw::load_string(rdb)).unwrap();
-        let mut table = Box::new(AggTable::new(fields));
-        table.views = serde_json::from_str::<Vec<AggView>>(&raw::load_string(rdb)).unwrap();
+    unsafe extern "C" fn agg_rdb_load(rdb: *mut raw::RedisModuleIO, encver: c_int) -> *mut c_void {
+        let table = serde_json::from_str::<AggTable>(&raw::load_string(rdb)).unwrap();
+        let table = Box::new(table);
         Box::into_raw(table) as *mut c_void
     }
 
     #[allow(non_snake_case, unused)]
     #[no_mangle]
-    pub unsafe extern "C" fn AggFree(value: *mut c_void) {
+    unsafe extern "C" fn agg_free(value: *mut c_void) {
         Box::from_raw(value as *mut AggTable);
     }
 
     #[allow(non_snake_case, unused)]
     #[no_mangle]
-    pub unsafe extern "C" fn AggRdbSave(rdb: *mut raw::RedisModuleIO, value: *mut c_void) {
-        let table = Box::from_raw(value as *mut AggTable);
-        raw::save_string(rdb, &serde_json::to_string(&table.fields).unwrap());
-        raw::save_string(rdb, &serde_json::to_string(&table.views).unwrap());
+    unsafe extern "C" fn agg_rdb_save(rdb: *mut raw::RedisModuleIO, value: *mut c_void) {
+        let table = &*(value as *mut AggTable);
+        raw::save_string(rdb, &serde_json::to_string(table).unwrap());
     }
 
     pub(crate) static mut TYPE_METHODS: raw::RedisModuleTypeMethods = raw::RedisModuleTypeMethods {
         version: raw::REDISMODULE_TYPE_METHOD_VERSION as u64,
 
-        rdb_load: Some(AggRdbLoad),
-        rdb_save: Some(AggRdbSave),
+        rdb_load: Some(agg_rdb_load),
+        rdb_save: Some(agg_rdb_save),
         aof_rewrite: None,
-        free: Some(AggFree),
+        free: Some(agg_free),
 
         // Currently unused by Redis
         mem_usage: None,
@@ -392,7 +392,7 @@ mod agg {
     };
 }
 
-fn new_aggregates(ctx: &Context, args: Vec<String>) -> RedisResult {
+fn new_table(ctx: &Context, args: Vec<String>) -> RedisResult {
     if args.len() <= 2 {
         return Err(RedisError::WrongArity);
     }
@@ -449,6 +449,23 @@ fn insert_data(ctx: &Context, args: Vec<String>) -> RedisResult {
     }
 }
 
+fn dump_table(ctx: &Context, args: Vec<String>) -> RedisResult {
+    if args.len() <= 2 {
+        return Err(RedisError::WrongArity);
+    }
+    ctx.auto_memory();
+    let key = ctx.open_key(&args[1]);
+    match key.get_value::<AggTable>(&agg::REDIS_TYPE)? {
+        None => {
+            Err(RedisError::Str("key not exist"))
+        }
+        Some(v) => {
+            let s = serde_json::to_string(v).unwrap();
+            Ok(RedisValue::SimpleString(s))
+        }
+    }
+}
+
 redis_module! {
     name: "aggregate",
     version: 1,
@@ -456,8 +473,9 @@ redis_module! {
         agg,
     ],
     commands: [
-        ["agg.new", new_aggregates, "write"],
+        ["agg.new", new_table, "write"],
         ["agg.view", add_view, "write"],
         ["agg.insert", insert_data, "write"],
+        ["agg.dump", dump_table, ""],
     ],
 }
