@@ -30,13 +30,59 @@ $ redis-cli hgetall kline_1m
 
 What the above example does is basically ``select time_bucket('1 minute', time), first(price), max(price), min(price), last(price), sum(amount), sum(value) from btc_usdt group by 1``, but runs in realtime/incremental/streaming way.
 
+### Commands
+
+* ``agg.new key field [field …]``
+
+  Create a stream table with multiple columns, the first field must be time.
+
+* ``agg.view key view_name [INTERVAL seconds] aggfunc field [aggfund field]``
+
+  Create a aggregation view on the stream table, if you specify the optional ``interval`` argument, it's a group by aggregation, like  ``group by time % seconds`` in sql.
+
+  A key named ``view_name`` will be created to store aggregation results, for group by aggretation, the type of key is hash, otherwise, it's a plain string.
+
+* ``agg.insert key time [double …]``
+
+  Insert item into the stream table, will trigger all the aggregations to update. the value of ``time`` is timestamp in milliseconds, with an optional sequence number, seperated with a ``-``, just like the stream entry ID in redis stream. 
+
+  If the sequence number is not provided, it will generate one. 
+
+  If it is provided, the time and sequence pair will be compared with last one, if provided one is equal or smaller than the last one, the operation fails. Can be used to implement idempotence.
+
+  ```
+  redis> agg.insert mystream 1564218772000
+  1564218772000-0
+  redis> agg.insert mystream 1564218772000
+  1564218772000-1
+  redis> agg.insert mystream 1564218772000-1
+  (error) input time is smaller
+  redis> agg.insert mystream 1564218772000-2
+  1564218772000-2
+  redis> agg.insert mystream 1564218772001
+  1564218772001-0
+  ```
+
+* ``agg.current key ``
+
+  Query current timucket and the partial aggregation results.
+
+* ``agg.save key``
+
+  Save current partial aggregation results into standalone key. They will automatically be saved when the time bucket changes in group by aggregation.
+
+* ``agg.clear key``
+
+  Clear the partial aggregation results, won't delete already saved keys.
+
+* ``agg.last_id key``
+
+  Return the biggest recorded milliseconds-sequence pair.
+
 ### Notice
 
 * The first column must be timestamp, the column name is not important, but the position is important.
 * The aggregation key only stores partial aggregation state for current time bucket. When save happens, the aggregation results are written into standalone keys.
-* The aggregation view with ``interval n`` option is like group by in sql, their results are written into hash value, whose key is timestamp for the time bucket. The aggregation view without ``interval`` option, their results are written into simple string values. 
-* Save happens when input time cross time bucket, or command `agg.save` get called.
-* The input timestamp need to increase, the inputs with smaller timestamp are ignored.
 * Currently supports these aggregation operations:  ``min``, ``max``, ``first``, ``last``, ``sum``, ``avg``, ``count``, ``stds``, ``stdp``, ``vars``, ``varp``.
 * Only support ``aof-use-rdb-preamble yes``, or just disable appendonly. It saves me some time to implement aof rewrite operation, i think this option will be the default in the future anyway.
 
@@ -44,4 +90,3 @@ What the above example does is basically ``select time_bucket('1 minute', time),
 
 * Support more aggregation operations.
 * Support month/year group by operation.
-* Better support for idempotence.

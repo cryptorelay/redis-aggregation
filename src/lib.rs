@@ -8,7 +8,7 @@ extern crate serde_tuple;
 use std::collections::HashMap;
 use std::vec::Vec;
 use std::convert::TryInto;
-use std::num::TryFromIntError;
+use std::num::{TryFromIntError, ParseIntError};
 
 use serde_json;
 use serde::{Serialize, Serializer, Deserialize, Deserializer};
@@ -31,6 +31,47 @@ impl TimeFunc {
         match self {
             TimeFunc::Interval(n) => (time / *n as f64).floor() * (*n as f64)
         }
+    }
+}
+
+/// ```
+/// assert_eq!(StreamID{ms: 10, seq: 0} > StreamID{ms: 0, seq: 10});
+/// assert_eq!(StreamID{ms: 10, seq: 10} > StreamID{ms: 10, seq: 9});
+/// let id = StreamID{ms: 10, seq: 10}
+/// assert_eq!(id.increment(10))
+/// assert_eq!(id.seq, 11)
+/// ```
+#[derive(Serialize_tuple, Deserialize_tuple, PartialEq, Eq, PartialOrd, Ord, Clone)]
+struct StreamID {
+    ms: u64,
+    seq: u64
+}
+
+impl StreamID {
+    fn new() -> StreamID {
+        StreamID {
+            ms: 0,
+            seq: 0
+        }
+    }
+
+    fn increment(&mut self, ms_: u64) -> bool {
+        if ms_ < self.ms {
+            false
+        } else if ms_ == self.ms {
+            self.seq += 1;
+            true
+        } else {
+            self.ms = ms_;
+            self.seq = 0;
+            true
+        }
+    }
+}
+
+impl Into<String> for StreamID {
+    fn into(self) -> String {
+        format!("{}-{}", self.ms, self.seq)
     }
 }
 
@@ -422,11 +463,11 @@ pub struct AggView {
 }
 
 impl AggView {
-    pub fn update(&mut self, ctx: &Context, time: Time, values: &[Value]) {
+    pub fn update(&mut self, ctx: &Context, values: &[Value]) {
         match self.groupby {
             None => {}
             Some(ref groupby) => {
-                let grouptime = groupby.func.apply(time);
+                let grouptime = groupby.func.apply(values[0]);
                 if grouptime > groupby.current {
                     // save current and reset
                     if groupby.current > 0. {
@@ -474,7 +515,8 @@ pub struct AggTable {
     fields: Vec<String>,
     #[serde(skip)]
     fields_by_name: HashMap<String, usize>,
-    views: Vec<AggView>
+    views: Vec<AggView>,
+    last_id: StreamID,
 }
 
 impl AggTable {
@@ -487,7 +529,8 @@ impl AggTable {
         return AggTable {
             fields: fields,
             fields_by_name: fields_by_name,
-            views: Vec::new()
+            views: Vec::new(),
+            last_id: StreamID::new(),
         }
     }
 
@@ -538,15 +581,39 @@ impl AggTable {
         REDIS_OK
     }
 
-    pub fn update(&mut self, ctx: &Context, args: &[String]) -> RedisResult {
-        if args.len() != self.fields.len() {
+    pub fn update(&mut self, ctx: &Context, time: &str, args: &[String]) -> RedisResult {
+        if args.len() + 1 != self.fields.len() {
             return Err(RedisError::WrongArity);
         }
-        let args = args.into_iter().map(parse_float).collect::<Result<Vec<f64>, RedisError>>()?;
+        let parse_err = |e: ParseIntError| RedisError::String(e.to_string());
+        let (ms, seq) = match time.find('-') {
+            None => (time.parse::<u64>().map_err(parse_err)?,
+                     None),
+            Some(i) => (time[..i].parse::<u64>().map_err(parse_err)?,
+                        Some(time[i+1..].parse::<u64>().map_err(parse_err)?))
+        };
+        let id = match seq {
+            None => {
+                if !self.last_id.increment(ms) {
+                    return Err(RedisError::Str("input time is smaller"));
+                }
+                self.last_id.clone()
+            }
+            Some(seq) => {
+                let id = StreamID{ms: ms, seq: seq};
+                if id <= self.last_id {
+                    return Err(RedisError::Str("input time is smaller"));
+                }
+                self.last_id = id.clone();
+                id
+            }
+        };
+        let mut args = args.into_iter().map(parse_float).collect::<Result<Vec<f64>, RedisError>>()?;
+        args.insert(0, id.ms as Value / 1000.);
         for view in &mut self.views {
-            view.update(ctx, args[0], &args);
+            view.update(ctx, &args);
         }
-        REDIS_OK
+        Ok(RedisValue::SimpleString(id.into()))
     }
 }
 
@@ -633,7 +700,7 @@ fn add_view(ctx: &Context, args: Vec<String>) -> RedisResult {
 }
 
 fn insert_data(ctx: &Context, args: Vec<String>) -> RedisResult {
-    if args.len() <= 2 {
+    if args.len() <= 3 {
         return Err(RedisError::WrongArity);
     }
     ctx.auto_memory();
@@ -643,7 +710,7 @@ fn insert_data(ctx: &Context, args: Vec<String>) -> RedisResult {
             Err(RedisError::Str("key not exist"))
         }
         Some(v) => {
-            let result = v.update(ctx, &args[2..])?;
+            let result = v.update(ctx, &args[2], &args[3..])?;
             ctx.replicate_verbatim();
             Ok(result)
         }
@@ -668,7 +735,7 @@ fn dump_table(ctx: &Context, args: Vec<String>) -> RedisResult {
 }
 
 fn save_table(ctx: &Context, args: Vec<String>) -> RedisResult {
-    if args.len() <= 1 {
+    if args.len() != 2 {
         return Err(RedisError::WrongArity);
     }
     ctx.auto_memory();
@@ -687,6 +754,23 @@ fn save_table(ctx: &Context, args: Vec<String>) -> RedisResult {
     }
 }
 
+fn get_last_id(ctx: &Context, args: Vec<String>) -> RedisResult {
+    if args.len() != 2 {
+        return Err(RedisError::WrongArity);
+    }
+
+    let key = ctx.open_key(&args[1]);
+    match key.get_value::<AggTable>(&agg::REDIS_TYPE)? {
+        None => {
+            Err(RedisError::Str("key not exist"))
+        }
+        Some(v) => {
+            Ok(RedisValue::SimpleString(v.last_id.clone().into()))
+        }
+    }
+
+}
+
 redis_module! {
     name: "aggregate",
     version: 1,
@@ -697,7 +781,8 @@ redis_module! {
         ["agg.new", new_table, "write"],
         ["agg.view", add_view, "write"],
         ["agg.insert", insert_data, "write"],
-        ["agg.dump", dump_table, ""],
         ["agg.save", save_table, "write"],
+        ["agg.dump", dump_table, ""],
+        ["agg.last_id", get_last_id, ""],
     ],
 }
