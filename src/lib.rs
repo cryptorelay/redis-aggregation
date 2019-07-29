@@ -768,7 +768,38 @@ fn get_last_id(ctx: &Context, args: Vec<String>) -> RedisResult {
             Ok(RedisValue::SimpleString(v.last_id.clone().into()))
         }
     }
+}
 
+fn get_current_value(ctx: &Context, args: Vec<String>) -> RedisResult {
+    if args.len() != 2 {
+        return Err(RedisError::WrongArity);
+    }
+
+    let key = ctx.open_key(&args[1]);
+    match key.get_value::<AggTable>(&agg::REDIS_TYPE)? {
+        None => {
+            Err(RedisError::Str("key not exist"))
+        }
+        Some(v) => {
+            let mut result = Vec::new();
+            for view in &v.views {
+                let mut items = Vec::new();
+                for field in &view.fields {
+                    items.push(field.op.current().map_or(
+                        RedisValue::None,
+                        |v| RedisValue::Float(v)
+                    ))
+                };
+                result.push(RedisValue::SimpleString(view.name.clone()));
+                result.push(RedisValue::Array(items));
+                result.push(view.groupby.as_ref().map_or(
+                    RedisValue::None,
+                    |g| RedisValue::Float(g.current)
+                ));
+            };
+            Ok(RedisValue::Array(result))
+        }
+    }
 }
 
 redis_module! {
@@ -784,5 +815,6 @@ redis_module! {
         ["agg.save", save_table, "write"],
         ["agg.dump", dump_table, ""],
         ["agg.last_id", get_last_id, ""],
+        ["agg.current", get_current_value, ""],
     ],
 }

@@ -65,15 +65,11 @@ What the above example does is basically ``select time_bucket('1 minute', time),
 
 * ``agg.current key ``
 
-  Query current timucket and the partial aggregation results.
+  Query current time buckets and the partial aggregation results.
 
 * ``agg.save key``
 
   Save current partial aggregation results into standalone key. They will automatically be saved when the time bucket changes in group by aggregation.
-
-* ``agg.clear key``
-
-  Clear the partial aggregation results, won't delete already saved keys.
 
 * ``agg.last_id key``
 
