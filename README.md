@@ -17,9 +17,9 @@ $ redis-cli agg.new btc_usdt time price amount value
 OK
 $ redis-cli agg.view btc_usdt kline_1m interval 60 first price max price min price last price sum amount sum value
 OK
-$ redis-cli agg.insert btc_usdt `date +%s` 1001.11 1.0 `echo '1001.11 * 1.0' | bc`
+$ redis-cli agg.insert btc_usdt $(($(date +%s)*1000)) 1001.11 1.0 $((1001.11 * 1.0))
 OK
-$ redis-cli agg.insert btc_usdt `date +%s` 1000.01 1.2 `echo '1000.01 * 1.2' | bc`
+$ redis-cli agg.insert btc_usdt $(($(date +%s)*1000)) 1000.01 1.2 $((1000.01 * 1.2))
 OK
 $ redis-cli agg.save btc_usdt
 OK
@@ -66,6 +66,18 @@ What the above example does is basically ``select time_bucket('1 minute', time),
 * ``agg.current key ``
 
   Query current time buckets and the partial aggregation results.
+
+  ```
+  redis> agg.current btc_usdt                                                                                                                <<<
+  1) kline_1m
+  2) 1) "1001.11"
+     2) "1001.11"
+     3) "1001.11"
+     4) "1001.11"
+     5) "1"
+     6) "1001.11"
+  3) "1564391700"
+  ```
 
 * ``agg.save key``
 
