@@ -17,7 +17,12 @@ use serde::de::Error;
 
 use redismodule::{
     Context, RedisResult, RedisError, RedisValue, REDIS_OK,
-    parse_integer, parse_float};
+    parse_integer, parse_float
+};
+
+use redismodule::native_types::RedisType;
+use std::os::raw::{c_void};
+
 
 type Time = f64;
 type Value = f64;
@@ -621,35 +626,30 @@ impl AggTable {
 }
 
 //////////////////////////////////////////////////////
-mod agg {
-    use redismodule::native_types::RedisType;
-    use redismodule::raw;
-    use std::os::raw::{c_int, c_void};
-    use crate::{AggTable};
 
-    pub(crate) static REDIS_TYPE: RedisType = RedisType::new("aggre-hy1");
+#[allow(non_snake_case, unused)]
+unsafe extern "C" fn agg_rdb_load(rdb: *mut raw::RedisModuleIO, encver: c_int) -> *mut c_void {
+    let table = serde_json::from_str::<AggTable>(&raw::load_string(rdb)).unwrap();
+    let table = Box::new(table);
+    Box::into_raw(table) as *mut c_void
+}
 
-    #[allow(non_snake_case, unused)]
-    unsafe extern "C" fn agg_rdb_load(rdb: *mut raw::RedisModuleIO, encver: c_int) -> *mut c_void {
-        let table = serde_json::from_str::<AggTable>(&raw::load_string(rdb)).unwrap();
-        let table = Box::new(table);
-        Box::into_raw(table) as *mut c_void
-    }
+#[allow(non_snake_case, unused)]
+#[no_mangle]
+unsafe extern "C" fn agg_free(value: *mut c_void) {
+    Box::from_raw(value as *mut AggTable);
+}
 
-    #[allow(non_snake_case, unused)]
-    #[no_mangle]
-    unsafe extern "C" fn agg_free(value: *mut c_void) {
-        Box::from_raw(value as *mut AggTable);
-    }
+#[allow(non_snake_case, unused)]
+#[no_mangle]
+unsafe extern "C" fn agg_rdb_save(rdb: *mut raw::RedisModuleIO, value: *mut c_void) {
+    let table = &*(value as *mut AggTable);
+    raw::save_string(rdb, &serde_json::to_string(table).unwrap());
+}
 
-    #[allow(non_snake_case, unused)]
-    #[no_mangle]
-    unsafe extern "C" fn agg_rdb_save(rdb: *mut raw::RedisModuleIO, value: *mut c_void) {
-        let table = &*(value as *mut AggTable);
-        raw::save_string(rdb, &serde_json::to_string(table).unwrap());
-    }
-
-    pub(crate) static mut TYPE_METHODS: raw::RedisModuleTypeMethods = raw::RedisModuleTypeMethods {
+pub(crate) static AGG_REDIS_TYPE: RedisType = RedisType::new(
+    "aggre-hy1", 1,
+    raw::RedisModuleTypeMethods {
         version: raw::REDISMODULE_TYPE_METHOD_VERSION as u64,
 
         rdb_load: Some(agg_rdb_load),
@@ -660,8 +660,8 @@ mod agg {
         // Currently unused by Redis
         mem_usage: None,
         digest: None,
-    };
-}
+    }
+);
 
 fn new_table(ctx: &Context, args: Vec<String>) -> RedisResult {
     if args.len() <= 2 {
@@ -669,13 +669,13 @@ fn new_table(ctx: &Context, args: Vec<String>) -> RedisResult {
     }
     ctx.auto_memory();
     let key = ctx.open_key_writable(&args[1]);
-    match key.get_value::<AggTable>(&agg::REDIS_TYPE)? {
+    match key.get_value::<AggTable>(&AGG_REDIS_TYPE)? {
         Some(_) => {
             return Err(RedisError::Str("key already exist"));
         }
         None => {
             key.set_value(
-                &agg::REDIS_TYPE,
+                &AGG_REDIS_TYPE,
                 AggTable::new(args[2..].to_vec())
             )?;
         }
@@ -690,7 +690,7 @@ fn add_view(ctx: &Context, args: Vec<String>) -> RedisResult {
     }
     ctx.auto_memory();
     let key = ctx.open_key_writable(&args[1]);
-    match key.get_value::<AggTable>(&agg::REDIS_TYPE)? {
+    match key.get_value::<AggTable>(&AGG_REDIS_TYPE)? {
         None => {
             Err(RedisError::Str("key not exist"))
         }
@@ -708,7 +708,7 @@ fn insert_data(ctx: &Context, args: Vec<String>) -> RedisResult {
     }
     ctx.auto_memory();
     let key = ctx.open_key_writable(&args[1]);
-    match key.get_value::<AggTable>(&agg::REDIS_TYPE)? {
+    match key.get_value::<AggTable>(&AGG_REDIS_TYPE)? {
         None => {
             Err(RedisError::Str("key not exist"))
         }
@@ -726,7 +726,7 @@ fn dump_table(ctx: &Context, args: Vec<String>) -> RedisResult {
     }
     ctx.auto_memory();
     let key = ctx.open_key(&args[1]);
-    match key.get_value::<AggTable>(&agg::REDIS_TYPE)? {
+    match key.get_value::<AggTable>(&AGG_REDIS_TYPE)? {
         None => {
             Err(RedisError::Str("key not exist"))
         }
@@ -744,7 +744,7 @@ fn save_table(ctx: &Context, args: Vec<String>) -> RedisResult {
     ctx.auto_memory();
 
     let key = ctx.open_key(&args[1]);
-    match key.get_value::<AggTable>(&agg::REDIS_TYPE)? {
+    match key.get_value::<AggTable>(&AGG_REDIS_TYPE)? {
         None => {
             Err(RedisError::Str("key not exist"))
         }
@@ -763,7 +763,7 @@ fn get_last_id(ctx: &Context, args: Vec<String>) -> RedisResult {
     }
 
     let key = ctx.open_key(&args[1]);
-    match key.get_value::<AggTable>(&agg::REDIS_TYPE)? {
+    match key.get_value::<AggTable>(&AGG_REDIS_TYPE)? {
         None => {
             Err(RedisError::Str("key not exist"))
         }
@@ -779,7 +779,7 @@ fn get_current_value(ctx: &Context, args: Vec<String>) -> RedisResult {
     }
 
     let key = ctx.open_key(&args[1]);
-    match key.get_value::<AggTable>(&agg::REDIS_TYPE)? {
+    match key.get_value::<AggTable>(&AGG_REDIS_TYPE)? {
         None => {
             Err(RedisError::Str("key not exist"))
         }
@@ -809,7 +809,7 @@ redis_module! {
     name: "aggregate",
     version: 1,
     data_types: [
-        agg,
+        AGG_REDIS_TYPE,
     ],
     commands: [
         ["agg.new", new_table, "write"],
