@@ -470,7 +470,7 @@ pub struct AggView {
 }
 
 impl AggView {
-    pub fn update(&mut self, ctx: &Context, values: &[Value]) {
+    pub fn update(&mut self, ctx: &Context, values: &[Value]) -> Result<(), RedisError> {
         match self.groupby {
             None => {}
             Some(ref groupby) => {
@@ -478,7 +478,7 @@ impl AggView {
                 if grouptime > groupby.current {
                     // save current and reset
                     if groupby.current > 0. {
-                        self.save(ctx).unwrap();
+                        self.save(ctx)?;
                     }
                     for agg in &mut self.fields {
                         agg.op.reset()
@@ -486,13 +486,14 @@ impl AggView {
                     self.groupby.as_mut().unwrap().current = grouptime;
                 } else if grouptime < groupby.current {
                     // ignore the item
-                    return
+                    return Ok(());
                 }
             }
         }
         for agg in &mut self.fields {
             agg.op.update(values[agg.index])
         }
+        Ok(())
     }
 
     pub fn encode(&self) -> Result<String, RedisError> {
@@ -625,7 +626,7 @@ impl AggTable {
         let mut args = args.into_iter().map(parse_float).collect::<Result<Vec<f64>, RedisError>>()?;
         args.insert(0, id.ms as Value / 1000.);
         for view in &mut self.views {
-            view.update(ctx, &args);
+            view.update(ctx, &args)?;
         }
         Ok(RedisValue::SimpleString(id.into()))
     }
@@ -684,7 +685,10 @@ extern "C" fn timer_callback(ctx: *mut raw::RedisModuleCtx, arg: *mut c_void) ->
     match key.get_value::<AggTable>(&AGG_REDIS_TYPE).unwrap() {
         Some(table) => {
             table.timer = ctx.create_timer(TIMER_INTERVAL, timer_callback, Box::into_raw(name) as *mut _);
-            table.save(&ctx).unwrap();
+            match table.save(&ctx) {
+                Ok(_) => {}
+                Err(err) => {println!("save failed: {:?}", err);}
+            }
         }
         None => {
             println!("timer key not found");
