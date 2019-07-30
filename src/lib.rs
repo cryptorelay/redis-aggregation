@@ -498,13 +498,16 @@ impl AggView {
     }
 
     pub fn save(&self, ctx: &Context) -> RedisResult {
-        let encoded = self.encode()?;
         match self.groupby {
             None => {
-                ctx.call("set", &[&self.name, &encoded])
+                ctx.call("set", &[&self.name, &self.encode()?])
             }
             Some(ref groupby) => {
-                ctx.call("hset", &[&self.name, &groupby.current.to_string(), &encoded])
+                if groupby.current > 0. {
+                    ctx.call("hset", &[&self.name, &groupby.current.to_string(), &self.encode()?])
+                } else {
+                    REDIS_OK
+                }
             }
         }
     }
