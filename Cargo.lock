@@ -272,7 +272,7 @@ dependencies = [
 name = "redis-aggregation"
 version = "0.1.0"
 dependencies = [
- "redismodule 0.1.0",
+ "redismodule 0.3.0",
  "serde 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.40 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -281,7 +281,7 @@ dependencies = [
 
 [[package]]
 name = "redismodule"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bindgen 0.47.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitflags 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",

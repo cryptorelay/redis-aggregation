@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::vec::Vec;
 use std::convert::TryInto;
 use std::num::{TryFromIntError, ParseIntError};
+use std::mem;
 
 use serde_json;
 use serde::{Serialize, Serializer, Deserialize, Deserializer};
@@ -26,6 +27,7 @@ use std::os::raw::{c_void};
 
 type Time = f64;
 type Value = f64;
+const TIMER_INTERVAL: u64 = 1000;
 
 #[derive(Serialize, Deserialize)]
 enum TimeFunc {
@@ -502,19 +504,18 @@ impl AggView {
         serde_json::to_string(&values).map_err(|err| RedisError::String(format!("encode failed: {}", err)))
     }
 
-    pub fn save(&self, ctx: &Context) -> RedisResult {
+    pub fn save(&self, ctx: &Context) -> Result<(), RedisError> {
         match self.groupby {
             None => {
-                ctx.call("set", &[&self.name, &self.encode()?])
+                ctx.call("set", &[&self.name, &self.encode()?])?;
             }
             Some(ref groupby) => {
                 if groupby.current > 0. {
-                    ctx.call("hset", &[&self.name, &groupby.current.to_string(), &self.encode()?])
-                } else {
-                    REDIS_OK
+                    ctx.call("hset", &[&self.name, &groupby.current.to_string(), &self.encode()?])?;
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -525,6 +526,9 @@ pub struct AggTable {
     fields_by_name: HashMap<String, usize>,
     views: Vec<AggView>,
     last_id: StreamID,
+
+    #[serde(skip)]
+    timer: u64,
 }
 
 impl AggTable {
@@ -539,6 +543,8 @@ impl AggTable {
             fields_by_name: fields_by_name,
             views: Vec::new(),
             last_id: StreamID::new(),
+
+            timer: 0,
         }
     }
 
@@ -623,6 +629,13 @@ impl AggTable {
         }
         Ok(RedisValue::SimpleString(id.into()))
     }
+
+    pub fn save(&self, ctx: &Context) -> Result<(), RedisError> {
+        for view in &self.views {
+            view.save(ctx)?;
+        }
+        Ok(())
+    }
 }
 
 //////////////////////////////////////////////////////
@@ -643,7 +656,7 @@ unsafe extern "C" fn agg_free(value: *mut c_void) {
 #[allow(non_snake_case, unused)]
 #[no_mangle]
 unsafe extern "C" fn agg_rdb_save(rdb: *mut raw::RedisModuleIO, value: *mut c_void) {
-    let table = &*(value as *mut AggTable);
+    let table: &AggTable = mem::transmute(value);
     raw::save_string(rdb, &serde_json::to_string(table).unwrap());
 }
 
@@ -663,6 +676,23 @@ pub(crate) static AGG_REDIS_TYPE: RedisType = RedisType::new(
     }
 );
 
+extern "C" fn timer_callback(ctx: *mut raw::RedisModuleCtx, arg: *mut c_void) -> () {
+    let ctx = Context::new(ctx);
+    ctx.auto_memory();
+    let name = unsafe{ Box::from_raw(arg as *mut String) };
+    let key = ctx.open_key_writable(&name);
+    match key.get_value::<AggTable>(&AGG_REDIS_TYPE).unwrap() {
+        Some(table) => {
+            table.timer = ctx.create_timer(TIMER_INTERVAL, timer_callback, Box::into_raw(name) as *mut _);
+            table.save(&ctx).unwrap();
+        }
+        None => {
+            println!("timer key not found");
+        }
+    };
+
+}
+
 fn new_table(ctx: &Context, args: Vec<String>) -> RedisResult {
     if args.len() <= 2 {
         return Err(RedisError::WrongArity);
@@ -674,10 +704,12 @@ fn new_table(ctx: &Context, args: Vec<String>) -> RedisResult {
             return Err(RedisError::Str("key already exist"));
         }
         None => {
-            key.set_value(
+            let table = key.set_value(
                 &AGG_REDIS_TYPE,
                 AggTable::new(args[2..].to_vec())
             )?;
+            let key_ptr = Box::new(args[1].clone());
+            table.timer = ctx.create_timer(TIMER_INTERVAL, timer_callback, Box::into_raw(key_ptr) as *mut _);
         }
     }
     ctx.replicate_verbatim();
@@ -749,9 +781,7 @@ fn save_table(ctx: &Context, args: Vec<String>) -> RedisResult {
             Err(RedisError::Str("key not exist"))
         }
         Some(v) => {
-            for view in &v.views {
-                view.save(ctx)?;
-            }
+            v.save(ctx)?;
             REDIS_OK
         }
     }
