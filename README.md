@@ -83,6 +83,8 @@ What the above example does is basically ``select time_bucket('1 minute', time),
 
   Save current partial aggregation results into standalone key. They will automatically be saved when the time bucket changes in group by aggregation.
 
+  Also automitically saved once per second.
+
 * ``agg.last_id key``
 
   Return the biggest recorded milliseconds-sequence pair.
