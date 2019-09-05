@@ -90,6 +90,7 @@ trait AggOp {
     fn current(&self) -> Option<Value>;
 }
 
+#[derive(Default)]
 struct AggFirst(Option<Value>);
 impl AggOp for AggFirst {
     fn save(&self) -> (&str, String) {
@@ -111,6 +112,7 @@ impl AggOp for AggFirst {
     }
 }
 
+#[derive(Default)]
 struct AggLast(Option<Value>);
 impl AggOp for AggLast {
     fn save(&self) -> (&str, String) {
@@ -130,6 +132,7 @@ impl AggOp for AggLast {
     }
 }
 
+#[derive(Default)]
 struct AggMin(Option<Value>);
 impl AggOp for AggMin {
     fn save(&self) -> (&str, String) {
@@ -157,6 +160,7 @@ impl AggOp for AggMin {
     }
 }
 
+#[derive(Default)]
 struct AggMax(Option<Value>);
 impl AggOp for AggMax {
     fn save(&self) -> (&str, String) {
@@ -184,6 +188,7 @@ impl AggOp for AggMax {
     }
 }
 
+#[derive(Default)]
 struct AggAvg {
     count: usize,
     sum: Value
@@ -214,6 +219,7 @@ impl AggOp for AggAvg {
     }
 }
 
+#[derive(Default)]
 struct AggSum(Value);
 impl AggOp for AggSum {
     fn save(&self) -> (&str, String) {
@@ -233,6 +239,7 @@ impl AggOp for AggSum {
     }
 }
 
+#[derive(Default)]
 struct AggCount(usize);
 impl AggOp for AggCount {
     fn save(&self) -> (&str, String) {
@@ -252,6 +259,7 @@ impl AggOp for AggCount {
     }
 }
 
+#[derive(Default)]
 struct AggStd {
     sum: Value,
     sum_2: Value,
@@ -259,13 +267,6 @@ struct AggStd {
 }
 
 impl AggStd {
-    fn new() -> AggStd {
-        return AggStd{
-            sum: 0.,
-            sum_2: 0.,
-            count: 0
-        }
-    }
     fn to_string(&self) -> String {
         serde_json::to_string(&(self.sum, self.sum_2, self.count)).unwrap()
     }
@@ -300,6 +301,7 @@ impl AggStd {
     }
 }
 
+#[derive(Default)]
 struct AggVarP(AggStd);
 impl AggOp for AggVarP {
     fn save(&self) -> (&str, String) {
@@ -323,6 +325,7 @@ impl AggOp for AggVarP {
     }
 }
 
+#[derive(Default)]
 struct AggVarS(AggStd);
 impl AggOp for AggVarS {
     fn save(&self) -> (&str, String) {
@@ -348,6 +351,7 @@ impl AggOp for AggVarS {
     }
 }
 
+#[derive(Default)]
 struct AggStdP(AggStd);
 impl AggOp for AggStdP {
     fn save(&self) -> (&str, String) {
@@ -371,6 +375,7 @@ impl AggOp for AggStdP {
     }
 }
 
+#[derive(Default)]
 struct AggStdS(AggStd);
 impl AggOp for AggStdS {
     fn save(&self) -> (&str, String) {
@@ -396,32 +401,21 @@ impl AggOp for AggStdS {
     }
 }
 
-fn parse_agg_type(name: &String) -> Option<Box<AggOp>>
+fn parse_agg_type(name: &str) -> Option<Box<AggOp>>
 {
-    if name == "first" {
-        return Some(Box::new(AggFirst(None)));
-    } else if name == "last" {
-        return Some(Box::new(AggLast(None)));
-    } else if name == "min" {
-        return Some(Box::new(AggMin(None)));
-    } else if name == "max" {
-        return Some(Box::new(AggMax(None)));
-    } else if name == "avg" {
-        return Some(Box::new(AggAvg{count: 0, sum: 0.}));
-    } else if name == "sum" {
-        return Some(Box::new(AggSum(0.)));
-    } else if name == "count" {
-        return Some(Box::new(AggCount(0)));
-    } else if name == "stds" {
-        return Some(Box::new(AggStdS(AggStd::new())));
-    } else if name == "stdp" {
-        return Some(Box::new(AggStdP(AggStd::new())));
-    } else if name == "vars" {
-        return Some(Box::new(AggVarS(AggStd::new())));
-    } else if name == "varp" {
-        return Some(Box::new(AggVarP(AggStd::new())));
-    } else {
-        return None;
+    match name {
+        "first" => Some(Box::new(AggFirst::default())),
+        "last" => Some(Box::new(AggLast::default())),
+        "min" => Some(Box::new(AggMin::default())),
+        "max" => Some(Box::new(AggMax::default())),
+        "avg" => Some(Box::new(AggAvg::default())),
+        "sum" => Some(Box::new(AggSum::default())),
+        "count" => Some(Box::new(AggCount::default())),
+        "stds" => Some(Box::new(AggStdS::default())),
+        "stdp" => Some(Box::new(AggStdP::default())),
+        "vars" => Some(Box::new(AggVarS::default())),
+        "varp" => Some(Box::new(AggVarP::default())),
+        _ => None
     }
 }
 
@@ -444,7 +438,7 @@ impl<'de> Deserialize<'de> for Box<AggOp> {
         D: Deserializer<'de>,
     {
         let (name, value) = Deserialize::deserialize(deserializer)?;
-        let mut agg = parse_agg_type(&name).ok_or(Error::custom("invalid agg type"))?;
+        let mut agg = parse_agg_type(name).ok_or(Error::custom("invalid agg type"))?;
         agg.load(value);
         Ok(agg)
     }
