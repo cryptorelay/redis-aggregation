@@ -5,7 +5,7 @@ authors = ["yihuang <yi.codeplayer@gmail.com>"]
 edition = "2018"
 
 [lib]
-name = "aggregate"
+name = "redis_aggregation"
 crate-type = ["cdylib"]
 
 [dependencies]
