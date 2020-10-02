@@ -9,8 +9,12 @@ name = "redis_aggregation"
 crate-type = ["cdylib"]
 
 [dependencies]
+libc = "0.2"
 serde_json = "1.0"
 serde = "1.0"
 serde_derive = "1.0"
 serde_tuple = "0.2"
-redismodule = {path = './redismodule-rs'}
+redis-module = { version = "0.10", features = ["experimental-api"]}
+
+[dev-dependencies]
+redis-module = { version = "0.10", features = ["experimental-api", "test"]}

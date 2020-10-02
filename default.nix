@@ -1,4 +1,4 @@
-{ pkgs? import <nixpkgs> {} }:
+{ pkgs ? import <nixpkgs> {} }:
 with pkgs;
 rustPlatform.buildRustPackage {
   pname = "redis-aggregation";
@@ -14,5 +14,5 @@ rustPlatform.buildRustPackage {
       "^redismodule-rs/.*"
     ];
   };
-  cargoSha256 = sha256:00fzh8jfay0ys4ag648knaxg0qp8qpyw1l8mcv6jp8bk36r7wd34;
+  cargoSha256 = sha256:1rcxkhazhfbswqq99n9a68xvhl7ywk1n3gqi412bv89ikyl3jfzr;
 }
