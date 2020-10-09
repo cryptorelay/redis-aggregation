@@ -1,0 +1,30 @@
+name: default
+on:
+  push:
+    branches: master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: cachix/install-nix-action@v10
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+      - name: Build image
+        run: |
+          nix-build docker.nix
+          docker load < result
+      - name: Dump github context
+        run: echo "$GITHUB_CONTEXT"
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+      - name: Push image
+        run: |
+          echo "$PASSWORD" | docker login docker.pkg.github.com -u $USERNAME --password-stdin
+          docker tag cryptorelay/redis-aggregation:latest $TARGET
+          docker push $TARGET
+        env:
+          USERNAME: ${{ github.repository_owner }}
+          PASSWORD: ${{ secrets.CR_PAT }}
+          TARGET: "docker.pkg.github.com/${{ github.repository }}/${{ github.event.repository.name }}:latest"
