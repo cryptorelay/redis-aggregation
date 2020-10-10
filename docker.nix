@@ -5,7 +5,6 @@ let
 in
 dockerTools.buildLayeredImage {
   name = "cryptorelay/redis-aggregation";
-  tag = "latest";
   config.Entrypoint = [
     "${redis}/bin/redis-server"
     "--loadmodule"

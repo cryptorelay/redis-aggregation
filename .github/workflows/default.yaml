@@ -2,29 +2,44 @@ name: default
 on:
   push:
     branches: master
+    tags:
+    - '*'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: cachix/install-nix-action@v10
+      - uses: actions/checkout@v2.3.3
+      - uses: cachix/install-nix-action@v11
         with:
           nix_path: nixpkgs=channel:nixos-unstable
-      - name: Build image
+
+      - uses: cachix/cachix-action@v6
+        if: github.ref == 'refs/heads/master'
+        with:
+          name: cryptorelay
+          signingKey: '${{ secrets.CACHIX_SIGNING_KEY }}'
+      - run: |
+          nix-env -iA cachix -f https://cachix.org/api/v1/install
+          cachix use cryptorelay
+        if: github.ref != 'refs/heads/master'
+
+      - name: Build and test
+        run: nix-build
+
+      - name: Publish docker image
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
         run: |
+          echo "${{ secrets.CR_PAT }}" | docker login docker.pkg.github.com -u ${{ github.repository_owner }} --password-stdin
           nix-build docker.nix
-          docker load < result
-      - name: Dump github context
-        run: echo "$GITHUB_CONTEXT"
-        env:
-          GITHUB_CONTEXT: ${{ toJson(github) }}
-      - name: Push image
-        run: |
-          echo "$PASSWORD" | docker login docker.pkg.github.com -u $USERNAME --password-stdin
-          docker tag cryptorelay/redis-aggregation:latest $TARGET
+          OUTPUT=$(docker load < result)
+          IMAGE=${OUTPUT#Loaded image: }
+          if [ "$GITHUB_REF" == "refs/heads/master" ]; then
+            TAG="latest"
+          else
+            TAG=${GITHUB_REF#refs/tags/}
+          fi
+          TARGET="docker.pkg.github.com/${{ github.repository }}/${{ github.event.repository.name }}:$TAG"
+          docker tag $IMAGE $TARGET
           docker push $TARGET
-        env:
-          USERNAME: ${{ github.repository_owner }}
-          PASSWORD: ${{ secrets.CR_PAT }}
-          TARGET: "docker.pkg.github.com/${{ github.repository }}/${{ github.event.repository.name }}:latest"
+          echo "pushed: $TARGET"
