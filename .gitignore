@@ -2,3 +2,5 @@
 **/*.rs.bk
 __pycache__
 /.cargo
+/.envrc
+/result

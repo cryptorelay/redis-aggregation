@@ -1,13 +1,16 @@
 { system ? "x86_64-linux", pkgs ? import <nixpkgs> { inherit system; } }:
 with pkgs;
 let
-  module = import ./. { inherit pkgs; };
+  agg = import ./. { inherit pkgs; };
+  aggLib = agg + "/lib/libredis_aggregation." + (
+    if stdenv.isDarwin then "dylib" else "so"
+  );
 in
 dockerTools.buildLayeredImage {
   name = "cryptorelay/redis-aggregation";
   config.Entrypoint = [
     "${redis}/bin/redis-server"
     "--loadmodule"
-    "${module}/lib/libredis_aggregation.so"
+    "${aggLib}"
   ];
 }
