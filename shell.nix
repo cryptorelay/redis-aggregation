@@ -10,12 +10,8 @@ in
     buildInputs = [
       agg
       poetry
-      (poetry2nix.mkPoetryEnv {
-        projectDir = ./.;
-        editablePackageSources = {
-          integration_tests = ./integration_tests;
-        };
-      })
+      redis
+      (import ./integration_tests { inherit pkgs; })
     ];
 
     shellHook = ''
