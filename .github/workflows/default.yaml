@@ -51,10 +51,10 @@ jobs:
           nix-build docker.nix
           OUTPUT=$(docker load < result)
           IMAGE=${OUTPUT#Loaded image: }
-          if [ "$GITHUB_REF" == "refs/heads/master" ]; then
-            TAG="latest"
-          else
+          if [[ "$GITHUB_REF" = "refs/tags/"* ]]; then
             TAG=${GITHUB_REF#refs/tags/}
+          else
+            TAG="latest"
           fi
           TARGET="docker.pkg.github.com/${{ github.repository }}/${{ github.event.repository.name }}:$TAG"
           docker tag $IMAGE $TARGET
