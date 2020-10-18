@@ -35,7 +35,7 @@ jobs:
         with:
           name: cryptorelay
           signingKey: '${{ secrets.CACHIX_SIGNING_KEY }}'
-          skipPush: ${{github.ref != 'refs/heads/master'}}
+          skipPush: ${{github.event_name == 'pull_request'}}
 
       - name: Build and test
         run: nix-shell --run pytest
